@@ -219,6 +219,8 @@ export const auth = {
   getToken: (data) => api.post('/auth/get-token', data),
   
   // Pattern recovery endpoints
+  requestRecoveryOtp: (data) => api.post('/auth/request-recovery-otp', data),
+  verifyRecoveryOtp: (data) => api.post('/auth/verify-recovery-otp', data),
   resetPattern: (data) => {
     // Ensure the hash parameter is correctly named for the server
     const serverData = { ...data };
