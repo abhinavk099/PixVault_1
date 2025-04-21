@@ -1,3 +1,5 @@
+/* eslint-disable no-undef */
+
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
@@ -713,6 +715,169 @@ router.post('/get-token', async (req, res, next) => {
     });
   } catch (error) {
     console.error('Error in get-token:', error);
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /auth/request-recovery-otp
+ * @desc    Generate and send OTP for pattern recovery
+ * @access  Public
+ */
+router.post('/request-recovery-otp', async (req, res, next) => {
+  try {
+    const { username, email } = req.body;
+    
+    if (!username || !email) {
+      throw new SecurityError('Username and email are required');
+    }
+    
+    // Find user by username
+    const user = await User.findOne({ username });
+    if (!user) {
+      // For security reasons, don't reveal that the user doesn't exist
+      // Instead, pretend we sent an email
+      return res.json({
+        success: true,
+        message: 'If a matching account was found, an OTP has been sent to the email address.'
+      });
+    }
+    
+    // Verify email matches the user's email
+    if (user.email.toLowerCase() !== email.toLowerCase()) {
+      // For security reasons, don't reveal that the email doesn't match
+      return res.json({
+        success: true,
+        message: 'If a matching account was found, an OTP has been sent to the email address.'
+      });
+    }
+    
+    // Generate OTP
+    const otpService = require('../utils/otp');
+    const emailService = require('../utils/email');
+    const otp = otpService.generateOtp();
+    
+    // Store hashed OTP and expiry in user record
+    user.recoveryOtp = otpService.hashOtp(otp);
+    user.recoveryOtpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    
+    await user.save();
+    
+    // Send OTP email
+    await emailService.sendOtpEmail({
+      email: user.email,
+      username: user.username,
+      otp
+    });
+    
+    // Log the event
+    try {
+      await logSecurityEvent(req, {
+        event_type: 'OTP_GENERATED',
+        data: {
+          userId: user._id,
+          username: user.username
+        }
+      });
+    } catch (logError) {
+      console.warn('Failed to log OTP generation:', logError);
+      // Continue despite logging error
+    }
+    
+    res.json({
+      success: true,
+      message: 'If a matching account was found, an OTP has been sent to the email address.'
+    });
+  } catch (error) {
+    console.error('Error in request-recovery-otp:', error);
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /auth/verify-recovery-otp
+ * @desc    Verify OTP for pattern recovery and generate reset session token
+ * @access  Public
+ */
+router.post('/verify-recovery-otp', async (req, res, next) => {
+  try {
+    const { username, otp } = req.body;
+    
+    if (!username || !otp) {
+      throw new SecurityError('Username and OTP are required');
+    }
+    
+    // Find user
+    const user = await User.findOne({ username });
+    if (!user) {
+      throw new SecurityError('Invalid credentials');
+    }
+    
+    // Check if OTP exists and is not expired
+    if (!user.recoveryOtp || !user.recoveryOtpExpires) {
+      throw new SecurityError('No recovery OTP found. Please request a new one.');
+    }
+    
+    // Check if OTP is expired
+    if (user.recoveryOtpExpires < new Date()) {
+      throw new SecurityError('OTP has expired. Please request a new one.');
+    }
+    
+    // Verify OTP
+    const otpService = require('../utils/otp');
+    const isValid = otpService.verifyHashedOtp(otp, user.recoveryOtp);
+    
+    if (!isValid) {
+      // Log failed verification
+      try {
+        await logSecurityEvent(req, {
+          event_type: 'OTP_VERIFIED_FAILED',
+          data: {
+            userId: user._id,
+            username: user.username
+          }
+        });
+      } catch (logError) {
+        console.warn('Failed to log OTP verification failure:', logError);
+      }
+      
+      throw new SecurityError('Invalid OTP. Please try again.');
+    }
+    
+    // Generate reset session token
+    const resetSessionToken = crypto.randomBytes(32).toString('hex');
+    
+    // Store reset session token and expiry
+    user.resetSessionToken = resetSessionToken;
+    user.resetSessionExpires = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+    
+    // Clear the used OTP
+    user.recoveryOtp = undefined;
+    user.recoveryOtpExpires = undefined;
+    
+    await user.save();
+    
+    // Log successful verification
+    try {
+      await logSecurityEvent(req, {
+        event_type: 'OTP_VERIFIED_SUCCESS',
+        data: {
+          userId: user._id,
+          username: user.username
+        }
+      });
+    } catch (logError) {
+      console.warn('Failed to log OTP verification success:', logError);
+    }
+    
+    res.json({
+      success: true,
+      message: 'OTP verified successfully',
+      resetSessionToken,
+      username: user.username
+    });
+  } catch (error) {
+    console.error('Error in verify-recovery-otp:', error);
     next(error);
   }
 });
