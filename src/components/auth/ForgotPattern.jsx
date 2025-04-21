@@ -6,7 +6,6 @@ import {
   FormLabel,
   Input,
   VStack,
-  HStack,
   Heading,
   Text,
   useToast,
@@ -26,7 +25,6 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
   const [error, setError] = useState('');
   const [countdown, setCountdown] = useState(0); // Countdown for OTP resend
   const [otpSent, setOtpSent] = useState(false); // Track if OTP was sent
-  const [recoveryMethod, setRecoveryMethod] = useState('email'); // 'email' or 'phone'
   const toast = useToast();
 
   // Handle API errors consistently
@@ -40,11 +38,6 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
       errorMessage = error.message;
     } else {
       errorMessage = `Failed during ${context}`;
-    }
-    
-    // Check for specific error types
-    if (error.response?.status === 429) {
-      errorMessage = 'Too many attempts. Please try again later.';
     }
     
     setError(errorMessage);
@@ -90,26 +83,18 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
     if (e) e.preventDefault();
     setError('');
     
-    // Validate input based on recovery method
-    if (recoveryMethod === 'email') {
-      if (!email) {
-        setError('Please enter your email address');
-        return;
-      }
-    } else if (recoveryMethod === 'phone') {
-      if (!username) {
-        setError('Please enter your username');
-        return;
-      }
+    // Validate input
+    if (!username || !email) {
+      setError('Please enter both username and email address');
+      return;
     }
     
     setLoading(true);
     
     try {
-      const response = await auth.sendOtp({ 
+      const response = await auth.requestRecoveryOtp({ 
         username, 
-        email,
-        method: recoveryMethod
+        email
       });
       
       if (response.data.success) {
@@ -118,7 +103,7 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
         
         toast({
           title: 'OTP Sent',
-          description: `If the account exists, a verification code has been sent to your ${recoveryMethod === 'email' ? 'email' : 'phone'}`,
+          description: response.data.message || 'If a matching account was found, a verification code has been sent to your email',
           status: 'success',
           duration: 5000,
           isClosable: true,
@@ -136,7 +121,7 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
     e.preventDefault();
     setError('');
     
-    // Validate input with better validation
+    // Validate input
     if (!otp) {
       setError('Please enter the verification code');
       return;
@@ -151,33 +136,28 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
     setLoading(true);
     
     try {
-      // Determine which parameter to send based on recovery method
-      const verifyData = { otp };
-      if (recoveryMethod === 'email') {
-        verifyData.email = email;
-      } else {
-        verifyData.username = username;
-      }
-      
-      const response = await auth.verifyOtp(verifyData);
+      const response = await auth.verifyRecoveryOtp({
+        username,
+        otp
+      });
       
       if (response.data.success) {
+        // If successful, pass the session token to the parent component
+        // which will show the pattern reset component
+        if (onOtpVerified) {
+          onOtpVerified({
+            username: response.data.username,
+            sessionToken: response.data.resetSessionToken
+          });
+        }
+        
         toast({
-          title: 'OTP Verified',
-          description: 'Verification successful. You can now reset your pattern.',
+          title: 'Verification Successful',
+          description: response.data.message || 'You can now reset your pattern',
           status: 'success',
           duration: 5000,
           isClosable: true,
         });
-        
-        // Call the callback with username and session token
-        if (onOtpVerified) {
-          // Pass both username and email to ensure we have all needed data
-          onOtpVerified(
-            recoveryMethod === 'email' ? response.data.username : username, 
-            response.data.sessionToken
-          );
-        }
       }
     } catch (error) {
       handleApiError(error, 'verifying OTP');
@@ -188,23 +168,22 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
 
   return (
     <Box
-      w="100%" 
-      maxW="400px" 
-      p={6} 
+      p={6}
       borderWidth={1}
-      borderRadius="md"
-      boxShadow="md"
-      bg="white"
-      aria-labelledby="forgot-pattern-heading"
-      role="region"
+      borderRadius='lg'
+      boxShadow='md'
+      bg='white'
+      width='100%'
+      maxW='400px'
+      mx='auto'
     >
-      <VStack spacing={6} align="stretch">
-        <Heading size="lg" textAlign="center">
-          {step === 'request' ? 'Forgot Pattern' : 'Verify Code'}
+      <VStack spacing={4} align='stretch'>
+        <Heading size='md' textAlign='center' mb={2}>
+          {step === 'request' ? 'Recover Your Pattern' : 'Verify OTP Code'}
         </Heading>
         
         {error && (
-          <Alert status="error" borderRadius="md">
+          <Alert status='error' borderRadius='md'>
             <AlertIcon />
             <AlertDescription>{error}</AlertDescription>
           </Alert>
@@ -213,73 +192,36 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
         {step === 'request' ? (
           <form onSubmit={handleRequestOtp}>
             <VStack spacing={4}>
-              <Text textAlign="center">
-                Choose a recovery method to receive a verification code
+              <Text textAlign='center'>
+                Enter your account details to receive a verification code
               </Text>
               
-              {/* Recovery Method Selection */}
-              <FormControl mb={4}>
-                <FormLabel id="recovery-method-label">Recovery Method</FormLabel>
-                <HStack spacing={4} role="radiogroup" aria-labelledby="recovery-method-label">
-                  <Button
-                    variant={recoveryMethod === 'email' ? 'solid' : 'outline'}
-                    colorScheme="blue"
-                    onClick={() => setRecoveryMethod('email')}
-                    isDisabled={loading}
-                    flex={1}
-                    aria-checked={recoveryMethod === 'email'}
-                    role="radio"
-                    _hover={{ bg: recoveryMethod === 'email' ? 'blue.500' : 'blue.50' }}
-                    leftIcon={<Box as="span" w="1em" h="1em" borderRadius="full" bg={recoveryMethod === 'email' ? 'white' : 'transparent'} border="1px solid" mr="2" />}
-                  >
-                    Email
-                  </Button>
-                  <Button
-                    variant={recoveryMethod === 'phone' ? 'solid' : 'outline'}
-                    colorScheme="blue"
-                    onClick={() => setRecoveryMethod('phone')}
-                    isDisabled={loading}
-                    flex={1}
-                    aria-checked={recoveryMethod === 'phone'}
-                    role="radio"
-                    _hover={{ bg: recoveryMethod === 'phone' ? 'blue.500' : 'blue.50' }}
-                    leftIcon={<Box as="span" w="1em" h="1em" borderRadius="full" bg={recoveryMethod === 'phone' ? 'white' : 'transparent'} border="1px solid" mr="2" />}
-                  >
-                    Phone
-                  </Button>
-                </HStack>
-                <Text fontSize="sm" color="gray.500" mt={1}>
-                  {recoveryMethod === 'email' 
-                    ? "We'll send a verification code to your registered email address" 
-                    : "We'll send a verification code to your registered phone number"}
-                </Text>
+              <FormControl isRequired mb={4}>
+                <FormLabel>Username</FormLabel>
+                <Input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Enter your username"
+                  autoComplete="username"
+                  isDisabled={loading}
+                />
               </FormControl>
               
-              {recoveryMethod === 'email' ? (
-                <FormControl isRequired>
-                  <FormLabel>Email Address</FormLabel>
-                  <Input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="Enter your email"
-                    autoComplete="email"
-                    isDisabled={loading}
-                  />
-                </FormControl>
-              ) : (
-                <FormControl isRequired>
-                  <FormLabel>Username</FormLabel>
-                  <Input
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="Enter your username"
-                    autoComplete="username"
-                    isDisabled={loading}
-                  />
-                </FormControl>
-              )}
+              <FormControl isRequired>
+                <FormLabel>Email Address</FormLabel>
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Enter your email"
+                  autoComplete="email"
+                  isDisabled={loading}
+                />
+                <Text fontSize="sm" color="gray.500" mt={1}>
+                  Enter the email associated with your account
+                </Text>
+              </FormControl>
               
               <Button
                 type="submit"
@@ -292,7 +234,11 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
                 Send Verification Code
               </Button>
               
-              <Button variant="ghost" onClick={onBack} isDisabled={loading}>
+              <Button 
+                variant="ghost" 
+                onClick={onBack} 
+                isDisabled={loading}
+              >
                 Back to Sign In
               </Button>
             </VStack>
@@ -301,7 +247,7 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
           <form onSubmit={handleVerifyOtp}>
             <VStack spacing={4}>
               <Text textAlign="center">
-                Enter the verification code sent to your {recoveryMethod === 'email' ? 'email' : 'phone'}
+                Enter the verification code sent to your email
               </Text>
               
               <FormControl isRequired isInvalid={!!error}>
@@ -328,7 +274,7 @@ const ForgotPattern = ({ onBack, onOtpVerified }) => {
                   <FormErrorMessage>{error}</FormErrorMessage>
                 ) : (
                   <Text id="otp-helper-text" fontSize="sm" color="gray.500" mt={1}>
-                    Enter the 6-digit code we sent to your {recoveryMethod === 'email' ? 'email address' : 'phone number'}
+                    Enter the 6-digit code we sent to your email address
                   </Text>
                 )}
               </FormControl>
